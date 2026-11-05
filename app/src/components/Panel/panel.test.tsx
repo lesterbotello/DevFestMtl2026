@@ -173,6 +173,85 @@ describe('AgentPanel', () => {
     expect(await screen.findByText(/2 tools/i)).toBeInTheDocument()
   })
 
+  it('re-discovers tools before each send, so late-registered tools reach the backend', async () => {
+    const mock = installMockModelContext()
+    const imperativeOnly: ModelContextTool[] = [
+      { name: 'search_sessions', description: 'd', inputSchema: {}, ref: 'r1' },
+    ]
+    const withFormTool: ModelContextTool[] = [
+      ...imperativeOnly,
+      {
+        name: 'submit_feedback',
+        description: 'Rate a talk',
+        inputSchema: { type: 'object' },
+        ref: 'r2',
+      },
+    ]
+    // Panel-open discovery predates the declarative form's async registration.
+    mock.getTools.mockResolvedValueOnce(imperativeOnly).mockResolvedValueOnce(withFormTool)
+
+    const seenToolNames: string[][] = []
+    const backend: ModelBackend = {
+      id: 'on-device',
+      available: async () => true,
+      run: async (_conversation, tools) => {
+        seenToolNames.push(tools.map((t) => t.name))
+        return 'Rated the talk!'
+      },
+    }
+
+    const user = userEvent.setup()
+    render(
+      <StoreProvider>
+        <AgentPanel backend={backend} />
+      </StoreProvider>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /agent/i }))
+    expect(await screen.findByText(/1 tool/i)).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText(/message/i), 'Rate the WebGPU talk 5 stars')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(await screen.findByText(/rated the talk!/i)).toBeInTheDocument()
+    expect(seenToolNames).toEqual([['search_sessions', 'submit_feedback']])
+  })
+
+  it('keeps the last known tools when send-time re-discovery fails', async () => {
+    const mock = installMockModelContext()
+    mock.getTools
+      .mockResolvedValueOnce([
+        { name: 'search_sessions', description: 'd', inputSchema: {}, ref: 'r1' },
+      ])
+      .mockRejectedValueOnce(new Error('getTools is flaking'))
+
+    const seenToolNames: string[][] = []
+    const backend: ModelBackend = {
+      id: 'on-device',
+      available: async () => true,
+      run: async (_conversation, tools) => {
+        seenToolNames.push(tools.map((t) => t.name))
+        return 'The model answered.'
+      },
+    }
+
+    const user = userEvent.setup()
+    render(
+      <StoreProvider>
+        <AgentPanel backend={backend} />
+      </StoreProvider>,
+    )
+
+    await user.click(screen.getByRole('button', { name: /agent/i }))
+    expect(await screen.findByText(/1 tool/i)).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText(/message/i), 'Find WebGPU talks')
+    await user.click(screen.getByRole('button', { name: /send/i }))
+
+    expect(await screen.findByText(/the model answered./i)).toBeInTheDocument()
+    expect(seenToolNames).toEqual([['search_sessions']])
+  })
+
   it('returns an error string into the conversation when the context rejects an execution', async () => {
     const mock = installMockModelContext()
     mock.getTools.mockResolvedValue([

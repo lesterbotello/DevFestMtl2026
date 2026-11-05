@@ -85,17 +85,20 @@ export default function AgentPanel({ backend }: { backend: ModelBackend | null }
   const toolsRef = useRef<DiscoveredTool[]>([])
   toolsRef.current = tools
 
-  const refreshTools = useCallback(async () => {
+  const refreshTools = useCallback(async (): Promise<DiscoveredTool[]> => {
     const mc = getModelContext()
     if (!mc) {
       setTools([])
-      return
+      return []
     }
     try {
       const discovered = await mc.getTools()
-      setTools(mapDiscoveredTools(discovered, roleRef.current))
+      const mapped = mapDiscoveredTools(discovered, roleRef.current)
+      setTools(mapped)
+      return mapped
     } catch {
       setTools([])
+      return []
     }
   }, [])
 
@@ -186,7 +189,16 @@ export default function AgentPanel({ backend }: { backend: ModelBackend | null }
     setInput('')
     setBusy(true)
     try {
-      const reply = await activeBackend.run(history, toolsRef.current, onToolCall)
+      // Declarative form tools register asynchronously once their form mounts,
+      // so the snapshot taken when the panel opened can predate them:
+      // re-discover just before running, so every send carries the freshest
+      // tool list (and onToolCall resolves names against that same list).
+      const fresh = await refreshTools()
+      // A failed re-discovery (transient getTools error) must not strip the
+      // model of the tools it already had — fall back to the last known list.
+      const sendTools = fresh.length > 0 ? fresh : toolsRef.current
+      toolsRef.current = sendTools
+      const reply = await activeBackend.run(history, sendTools, onToolCall)
       setConversation((prev) => [...prev, { role: 'assistant', text: reply }])
     } catch (err) {
       setConversation((prev) => [
