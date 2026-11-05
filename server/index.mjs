@@ -47,8 +47,10 @@ function mapMessage(message) {
  * (type, format, description, nullable, enum, items, properties, required).
  * Chrome's declarative form tools derive 2020-12-style schemas that also
  * carry anyOf/const/title, which Gemini rejects ("Unknown name 'const'…
- * Cannot find field") — strip unknown keys recursively; the derived schemas
- * keep their enum and description, which carry the same information. */
+ * Cannot find field"), and they include the form selects' placeholder option
+ * (value=""), which Gemini rejects inside enums ("enum[0]: cannot be empty").
+ * Strip unknown keys recursively and drop empty enum entries; the derived
+ * schemas keep their enum and description, which carry the same information. */
 const GEMINI_SCHEMA_KEYS = new Set([
   'type',
   'format',
@@ -74,6 +76,11 @@ function sanitizeSchema(node) {
         properties[name] = sanitizeSchema(schema)
       }
       sanitized.properties = properties
+    } else if (key === 'enum' && Array.isArray(value)) {
+      // Drop the placeholder option's empty value; an enum that empties
+      // out entirely is omitted — the property stays a string + description.
+      const values = value.filter((entry) => entry !== '')
+      if (values.length > 0) sanitized.enum = values
     } else {
       sanitized[key] = sanitizeSchema(value)
     }
