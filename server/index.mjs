@@ -43,6 +43,44 @@ function mapMessage(message) {
   }
 }
 
+/** Gemini's function-declaration schema accepts only a subset of JSON Schema
+ * (type, format, description, nullable, enum, items, properties, required).
+ * Chrome's declarative form tools derive 2020-12-style schemas that also
+ * carry anyOf/const/title, which Gemini rejects ("Unknown name 'const'…
+ * Cannot find field") — strip unknown keys recursively; the derived schemas
+ * keep their enum and description, which carry the same information. */
+const GEMINI_SCHEMA_KEYS = new Set([
+  'type',
+  'format',
+  'description',
+  'nullable',
+  'enum',
+  'items',
+  'properties',
+  'required',
+])
+
+function sanitizeSchema(node) {
+  if (Array.isArray(node)) return node.map(sanitizeSchema)
+  if (node === null || typeof node !== 'object') return node
+  const sanitized = {}
+  for (const [key, value] of Object.entries(node)) {
+    if (!GEMINI_SCHEMA_KEYS.has(key)) continue
+    if (key === 'properties') {
+      // `properties` maps property NAME → schema; the names are arbitrary
+      // and must survive — only their VALUES are schemas to sanitize.
+      const properties = {}
+      for (const [name, schema] of Object.entries(value)) {
+        properties[name] = sanitizeSchema(schema)
+      }
+      sanitized.properties = properties
+    } else {
+      sanitized[key] = sanitizeSchema(value)
+    }
+  }
+  return sanitized
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -80,7 +118,7 @@ async function handleChat(res, body) {
         functionDeclarations: tools.map((tool) => ({
           name: tool.name,
           description: tool.description,
-          parameters: tool.inputSchema ?? { type: 'object' },
+          parameters: sanitizeSchema(tool.inputSchema ?? { type: 'object' }),
         })),
       },
     ]
